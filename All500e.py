@@ -7,21 +7,20 @@ import torch.utils.data
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
-import matplotlib.pyplot as plt  # グラフ作成用ライブラリー
+from torch.utils.tensorboard import SummaryWriter # グラフ作成用ライブラリー
 from PIL import Image, ImageFilter
 
 # Initial setting
 workers = 2
-batch_size = 64
+batch_size = 512
 nz = 100
 nch_g = 64
 nch_d = 64
-n_epoch = 50  
+n_epoch = 500
 lr = 0.0002
 beta1 = 0.5
-outf = './All50e_result_cgan'
+outf = './All500e_result'
 display_interval = 100
-plt.rcParams['figure.figsize'] = 10, 6  # グラフの大きさ指定
 
 try:
     os.makedirs(outf)
@@ -123,8 +122,8 @@ def concat_image_label(image, label, device, n_class=40):
     # 画像とラベルを連結する
     B, C, H, W = image.shape    # 画像Tensorの大きさを取得
     label = label.reshape((B, n_class, 1,1))
-    label = oh_label.expand(B, n_class, H, W)  # ラベルを画像サイズに拡大
-    return torch.cat((image, oh_label), dim=1)    # 画像とラベルをチャネル方向（dim=1）で連結
+    label = label.expand(B, n_class, H, W)  # ラベルを画像サイズに拡大
+    return torch.cat((image, label), dim=1)    # 画像とラベルをチャネル方向（dim=1）で連結
 
 def concat_noise_label(noise, label, device):
     # ランダムベクトルとラベルを連結する
@@ -139,7 +138,7 @@ class Mydatasets(torch.utils.data.Dataset):
             self.dir_path = dir_path
             self.attr = []
             attr_list =[]
-            with open("list_attr_celeba.csv","r") as f:
+            with open("/mnt/hdd1/nokihara/dataset/list_attr_celeba.csv","r") as f:
                 for i in range(202599):
                     line1 = f.readline()
                     line = line1.split(",")
@@ -154,7 +153,7 @@ class Mydatasets(torch.utils.data.Dataset):
                     self.data.append(line[0])
                     #break
             attr_list = np.asarray(attr_list)
-            self.attr= torch.from_numpy(attr_list)
+            self.attr= torch.from_numpy(attr_list).float()
             self.datanum = len(self.attr)
 
         def __len__(self):
@@ -179,7 +178,7 @@ def main():
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                              ])
-    dir_path = "/home/nokihara/path/to/celeba/img_align_celeba/img_align_celeba/"
+    dir_path = "/mnt/hdd1/nokihara/dataset/img_align_celeba/img_align_celeba/"
     
     dataset = Mydatasets(dir_path, transform)
 
@@ -202,13 +201,16 @@ def main():
     optimizerD = optim.Adam(netD.parameters(), lr=lr, betas=(beta1, 0.999), weight_decay=1e-5)
     optimizerG = optim.Adam(netG.parameters(), lr=lr, betas=(beta1, 0.999), weight_decay=1e-5)
 
-    fixed_noise = torch.randn(batch_size, nz, 1, 1, device=device)
+    fixed_noise = torch.randn(40, nz, 1, 1, device=device)
 
-    fixed_label = [i for i in range(40)] * (batch_size // 40)  # 0〜6のラベルの繰り返し
+    fixed_label = [i for i in range(40)]   # 0〜6のラベルの繰り返し
     fixed_label = torch.tensor(fixed_label, dtype=torch.long, device=device)
 
-    fixed_noise_label = concat_noise_label(fixed_noise, fixed_label, device)  
-    Loss_D_list, Loss_G_list = [], []  # グラフ作成用リスト初期化
+    fixed_noise_label = concat_noise_label(fixed_noise, fixed_label, device)
+
+    writer = SummaryWriter(log_dir = "./All500e_logs")
+    # グラフ作成用
+    loss_num = 0
 
     # traning loop
     for epoch in range(n_epoch):
@@ -233,6 +235,7 @@ def main():
             D_x = output.mean().item()  
 
             fake_image = netG(fake_noise_label)  # Generatorが生成した偽物画像
+            fake_label = onehot_encode(fake_label, device) 
             fake_image_label = concat_image_label(fake_image, fake_label, device)   # 偽物画像とラベルを連結
 
             output = netD(fake_image_label.detach())  
@@ -258,9 +261,9 @@ def main():
                       .format(epoch + 1, n_epoch,
                               itr + 1, len(dataloader),
                               errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
-            
-                Loss_D_list.append(errD.item())  # Loss_Dデータ蓄積 (グラフ用)
-                Loss_G_list.append(errG.item())  # Loss_Gデータ蓄積 (グラフ用)
+
+                writer.add_scalars("Loss", {"Loss_D": errD.item(), "Loss_G": errG.item()}, loss_num) # Lossデータ(グラフ用)
+                loss_num = loss_num + 1
             
             if epoch == 0 and itr == 0:
                 vutils.save_image(real_image, '{}/real_samples.png'.format(outf),
@@ -277,15 +280,7 @@ def main():
             torch.save(netD.state_dict(), '{}/netD_epoch_{}.pth'.format(outf, epoch + 1))
 
     # グラフ作成
-    plt.figure()    
-    plt.plot(range(len(Loss_D_list)), Loss_D_list, color='blue', linestyle='-', label='Loss_D')
-    plt.plot(range(len(Loss_G_list)), Loss_G_list, color='red', linestyle='-', label='Loss_G')
-    plt.legend()
-    plt.xlabel('iter (*100)')
-    plt.ylabel('loss')
-    plt.title('Loss_D and Loss_G')
-    plt.grid()
-    plt.savefig('All50e_Loss_graph.png')          
+    writer.close()
 
 if __name__ == '__main__':
     main()    
